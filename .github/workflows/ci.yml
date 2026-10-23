@@ -228,9 +228,23 @@ jobs:
           name: oracle-report
           path: docs/oracle.md
 
+  cgmath-safety:
+    name: Vendored cgmath safety
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Upstream tests and swap regressions
+        run: cargo test --manifest-path vendor/cgmath/Cargo.toml --locked --features serde,rand,mint,swizzle
+      - name: Install Miri
+        run: rustup toolchain install nightly-2026-10-23 --profile minimal --component miri
+      - name: Check swap operations for undefined behavior
+        run: cargo +nightly-2026-10-23 miri test --manifest-path vendor/cgmath/Cargo.toml --locked --test security_swap
+
   # Preserve the existing check name for branch protection, including docs-only PRs.
   ci:
-    needs: [changes, checks, clippy, build-tests, tests, doc-tests, oracle]
+    needs: [changes, checks, clippy, build-tests, tests, doc-tests, oracle, cgmath-safety]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -238,6 +252,7 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
+          CGMATH: ${{ needs.cgmath-safety.result }}
           NATIVE: ${{ needs.changes.outputs.native }}
           CLIPPY: ${{ needs.clippy.result }}
           BUILD: ${{ needs.build-tests.result }}
@@ -247,6 +262,7 @@ jobs:
         run: |
           test "$CHANGES" = success
           test "$CHECKS" = success
+          test "$CGMATH" = success
           if [ "$NATIVE" = true ]; then
             test "$CLIPPY" = success
             test "$BUILD" = success

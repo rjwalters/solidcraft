@@ -93,3 +93,31 @@ SolidCraft changes:
 - `src/setup.rs`: the default device requests `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` when
   the adapter has it, so 2x and 8x work where the adapter supports them (WebGPU only
   guarantees 1x and 4x).
+
+## cgmath 0.18.0 (Apache-2.0, The CGMath Developers)
+
+Published crate: https://crates.io/crates/cgmath/0.18.0. The original licence,
+complete sources and upstream tests are retained. `cgmath/SECURITY-PROVENANCE.json`
+records the archive checksum and every published file hash.
+
+Changes for RUSTSEC-2026-0197:
+- `matrix.rs` and `structure.rs`: use sequential Copy reads and writes instead of
+  forming overlapping mutable references in matrix-column, matrix-element and
+  array swaps. This also covers matrix-row swaps and vectors/points.
+- Preserve bounds checking, including equal invalid indices. The related upstream
+  proposal (rustgd/cgmath#566) is still unmerged and skips that check.
+- `Cargo.toml`: independent test workspace; `Cargo.lock`: pinned test dependencies.
+- `tests/security_swap.rs`: 14 tests exhaust valid index pairs and invalid bounds.
+
+Run the upstream tests and regressions:
+
+```sh
+cargo test --manifest-path vendor/cgmath/Cargo.toml --locked --features serde,rand,mint,swizzle
+cargo +nightly-2026-10-23 miri test --manifest-path vendor/cgmath/Cargo.toml --locked --test security_swap
+```
+
+The unmodified published crate fails the matrix-column, matrix-element, matrix-row,
+vector and point controls under Miri. The patched copy passes all 14 regressions
+and 281 upstream tests/doc tests. This local patch keeps version 0.18.0; audit
+results must be interpreted alongside the retained source patch, without ignoring
+the advisory. Replace the override when a compatible upstream fix is released.
