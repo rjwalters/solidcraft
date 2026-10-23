@@ -298,9 +298,18 @@ fn bad<T>(msg: impl Into<String>) -> Result<T> {
 
 fn read_part(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Option<Vec<u8>>> {
     let want = name.trim_start_matches('/').to_ascii_lowercase();
-    let Some(idx) =
-        (0..zip.len()).find(|i| zip.name_for_index(*i).is_some_and(|n| n.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase() == want))
-    else {
+    let mut matching_index = None;
+    for index in 0..zip.len() {
+        let Some(entry_name) = zip.name_for_index(index) else {
+            continue;
+        };
+        let entry_name = entry_name.map_err(|e| IoError::Invalid(format!("3MF ZIP entry name: {e}")))?;
+        if entry_name.replace('\\', "/").trim_start_matches('/').to_ascii_lowercase() == want {
+            matching_index = Some(index);
+            break;
+        }
+    }
+    let Some(idx) = matching_index else {
         return Ok(None);
     };
     let mut f = zip.by_index(idx).map_err(|e| IoError::Invalid(format!("3MF {name}: {e}")))?;
@@ -319,7 +328,13 @@ fn attrs(e: &BytesStart) -> HashMap<String, String> {
     let mut m = HashMap::new();
     for a in e.attributes().flatten() {
         let k = String::from_utf8_lossy(a.key.local_name().as_ref()).to_string();
-        let v = a.unescape_value().map(|v| v.to_string()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).to_string());
+        // Keep quick-xml 0.38's UTF-8/entity decoding without the new
+        // attribute whitespace normalization changing stored names or values.
+        let v = std::str::from_utf8(&a.value)
+            .ok()
+            .and_then(|raw| quick_xml::escape::unescape(raw).ok())
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|| String::from_utf8_lossy(&a.value).into_owned());
         m.insert(k, v);
     }
     m
@@ -671,6 +686,42 @@ mod tests {
         zip.start_file("3D/3dmodel.model", o).unwrap();
         zip.write_all(model.as_bytes()).unwrap();
         zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn attribute_whitespace_and_entities_keep_the_existing_values() {
+        let element = BytesStart::from_content("object name=\"A\tB\r\nC&amp;D&#x9;E\" unknown=\"&missing;\"", 6);
+        let values = attrs(&element);
+        assert_eq!(values.get("name").map(String::as_str), Some("A\tB\r\nC&D\tE"));
+        assert_eq!(values.get("unknown").map(String::as_str), Some("&missing;"));
+    }
+
+    #[test]
+    fn part_lookup_keeps_case_and_slash_compatibility() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("\\3d\\3DMODEL.MODEL", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"model contents").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        assert_eq!(read_part(&mut archive, "/3D/3dmodel.model").unwrap().as_deref(), Some(b"model contents".as_slice()));
+    }
+
+    #[test]
+    fn legacy_entry_name_does_not_hide_the_requested_part() {
+        let name = "legacy";
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"unused").unwrap();
+        writer.start_file("_rels/.rels", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"relationships").unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let offsets: Vec<usize> = bytes.windows(name.len()).enumerate().filter_map(|(i, value)| (value == name.as_bytes()).then_some(i)).collect();
+        assert_eq!(offsets.len(), 2, "local and central names must both be changed");
+        for offset in offsets {
+            bytes[offset + 4] = 0xff;
+        }
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        assert_eq!(read_part(&mut archive, "/_rels/.rels").unwrap().as_deref(), Some(b"relationships".as_slice()));
     }
 
     #[test]

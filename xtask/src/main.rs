@@ -294,6 +294,9 @@ fn cmd_ci() -> Result<(), String> {
     licences::run(&root(), true)?;
     cmd_layers()?;
     let mut c = cargo();
+    c.args(["test", "--manifest-path", "vendor/cgmath/Cargo.toml", "--locked", "--features", "serde,rand,mint,swizzle"]);
+    run(c, "vendored cgmath security and upstream tests")?;
+    let mut c = cargo();
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);
     run(c, "cargo clippy -D warnings")?;
     let (wasm, n) = wasm_check()?;
