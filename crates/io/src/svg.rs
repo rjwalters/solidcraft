@@ -114,7 +114,13 @@ fn attrs(e: &BytesStart) -> Vec<(String, String)> {
         .flatten()
         .map(|a| {
             let k = String::from_utf8_lossy(a.key.local_name().as_ref()).to_string();
-            let v = a.unescape_value().map(|v| v.to_string()).unwrap_or_else(|_| String::from_utf8_lossy(&a.value).to_string());
+            // Keep quick-xml 0.38's UTF-8/entity decoding without the new
+            // attribute whitespace normalization changing stored names or values.
+            let v = std::str::from_utf8(&a.value)
+                .ok()
+                .and_then(|raw| quick_xml::escape::unescape(raw).ok())
+                .map(|value| value.into_owned())
+                .unwrap_or_else(|| String::from_utf8_lossy(&a.value).into_owned());
             (k, v)
         })
         .collect()
@@ -494,6 +500,14 @@ pub fn read_svg(text: &str) -> Result<Vec<Geom2>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attribute_whitespace_and_entities_keep_the_existing_values() {
+        let element = BytesStart::from_content("path id=\"A\tB\r\nC&amp;D&#x9;E\" unknown=\"&missing;\"", 4);
+        let values = attrs(&element);
+        assert_eq!(attr(&values, "id"), Some("A\tB\r\nC&D\tE"));
+        assert_eq!(attr(&values, "unknown"), Some("&missing;"));
+    }
 
     #[test]
     fn shapes_paths_and_units() {
